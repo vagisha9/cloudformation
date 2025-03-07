@@ -87,10 +87,12 @@ Resources:
             #!/bin/bash
             apt-get update -y
             sudo apt-get install nginx -y
+            service nginx start
             mkdir -p /var/www/html
             aws s3 cp s3://udacityinfra-bucket-1012/index.html /var/www/html/index.html
-            service nginx start
+            systemctl reload nginx
         ImageId: ami-005fc0f236362e99f
+        KeyName: privateserverproject
         SecurityGroupIds:
           - !Ref WebServerSecGroup
         InstanceType: t2.micro
@@ -128,6 +130,23 @@ Resources:
       Protocol: email  # Specify the protocol as 'email'
       Endpoint: vagisha14@gmail.com
 
+  # Create a CloudWatch Log Group
+  MyLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 7
+
+  # Create a Metric Filter
+  MyMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref MyLogGroup
+      FilterPattern: '{ $.eventName = "RunInstances" }'
+      MetricTransformations:
+        - MetricValue: "1"
+          MetricNamespace: "EC2"
+          MetricName: "InstanceCreationCount"
+
   MyCloudWatchAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
@@ -145,35 +164,6 @@ Resources:
       Dimensions:
         - Name: "TopicName"
           Value: !Ref SNSTopic
-
-  CloudFrontDistribution:
-    Type: AWS::CloudFront::Distribution
-    Properties:
-      DistributionConfig:
-        Origins:
-          - Id: S3Origin
-            DomainName: !GetAtt S3Bucket.DomainName  # Reference the S3 bucket
-            S3OriginConfig:
-              OriginAccessIdentity: ""  # Leave empty for public access
-        Enabled: true
-        DefaultCacheBehavior:
-          TargetOriginId: S3Origin
-          ViewerProtocolPolicy: redirect-to-https  # Redirect HTTP to HTTPS
-          AllowedMethods:
-            - GET
-            - HEAD
-          CachedMethods:
-            - GET
-            - HEAD
-          ForwardedValues:
-            QueryString: false
-            Cookies:
-              Forward: none
-          MinTTL: 0
-          DefaultTTL: 86400  # 1 day
-          MaxTTL: 31536000  # 1 year
-        ViewerCertificate:
-          CloudFrontDefaultCertificate: true  # Use the default CloudFront certificate
 
   WebAppInstanceRole:
     Type: AWS::IAM::Role
@@ -213,15 +203,31 @@ Resources:
       BucketName: "udacityinfra-bucket-1012"
       VersioningConfiguration:
         Status: Enabled
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
               SSEAlgorithm: AES256
       PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        IgnorePublicAcls: true
+        BlockPublicAcls: false
+        IgnorePublicAcls: false
         BlockPublicPolicy: false
-        RestrictPublicBuckets: true
+        RestrictPublicBuckets: false
+
+  S3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref S3Bucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: "*"
+            Action: "s3:GetObject"
+            Resource: !Sub "arn:aws:s3:::${S3Bucket}/*"
 
   WebAppLB:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
@@ -271,6 +277,7 @@ Resources:
         Fn::ImportValue:
           Fn::Sub: "${EnvironmentName}-VPCID"
 
+
 Outputs: 
 
   VPC: 
@@ -289,10 +296,10 @@ Outputs:
     Description: "The DNS of the Load Balancer"
     Value: !Sub "http://${WebAppLB.DNSName}"
 
-  CloudFrontURL:
-    Description: "URL of the CloudFront distribution"
-    Value: !Sub "https://${CloudFrontDistribution.DomainName}"
-
   SNSTopicARN:
     Description: "ARN of the SNS Topic for EC2 instance creation alerts"
     Value: !Ref SNSTopic
+
+  WebsiteUrl:
+    Description: "Website Url for S3"
+    Value: !GetAtt S3Bucket.WebsiteURL
